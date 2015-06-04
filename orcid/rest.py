@@ -15,7 +15,7 @@ def _parse_keywords(d):
     # (https://github.com/ORCID/ORCID-Parent/issues/27) makes this the  best
     # way. will fix when they do
     if d is not None:
-        return d.get('keyword',[{}])[0].get('value','').split(',')
+        return [k.strip() for k in d.get('keyword',[{}])[0].get('value','').split(',')]
     return []
 
 WebsiteBase = dictmapper('WebsiteBase', {
@@ -34,6 +34,11 @@ def _parse_researcher_urls(l):
     if l is not None:
         return [Website(d) for d in l]
     return []
+
+def _parse_value(meta):
+    if meta is not None:
+        meta.get('value').strip().strip('\n')
+    return
 
 CitationBase = dictmapper('CitationBase', {
     'text':['citation'],
@@ -87,8 +92,9 @@ AuthorBase = dictmapper('AuthorBase', {
     'orcid':['orcid-profile','orcid','value'],
     'family_name':PERSONAL_DETAILS_PATH + ['family-name','value'],
     'given_name':PERSONAL_DETAILS_PATH + ['given-names','value'],
-    'biography':BIO_PATH + ['biography',],
+    'biography':to(BIO_PATH + ['biography'], _parse_value),
     'keywords':to(BIO_PATH + ['keywords'], _parse_keywords),
+    'identifiers_map': to(BIO_PATH + ['external-identifiers', 'external-identifier']),
     'researcher_urls':to(BIO_PATH + ['researcher-urls','researcher-url'],
                          _parse_researcher_urls),
 })
@@ -107,6 +113,38 @@ class Author(AuthorBase):
             self._load_works()
         return self._loaded_works.publications
 
+    @property
+    def identifiers(self):
+        out = []
+        for exid in self.identifiers_map or []:
+            #import ipdb; ipdb.set_trace()
+            d = {}
+            d['id'] = exid["external-id-reference"]["value"]
+            d['label'] = exid["external-id-common-name"]["value"]
+            out.append(d)
+        return out
+
+    @property
+    def websites(self):
+        out = []
+        for url in self.researcher_urls or []:
+            d = {}
+            d['url'] = url.url
+            d['label'] = url.name
+            out.append(d)
+        return out
+
+    def profile(self):
+        return {
+            'given_name': self.given_name,
+            'family_name': self.family_name,
+            'full_name': " ".join([n for n in [self.given_name, self.family_name] if n is not None]),
+            'bio': self.biography,
+            'identifiers': self.identifiers,
+            'websites': self.websites,
+            'keywords': self.keywords
+        }
+
     def __repr__(self):
         return "<%s %s %s, ORCID %s>" % (type(self).__name__, self.given_name,
                                          self.family_name, self.orcid)
@@ -120,8 +158,8 @@ def get(orcid_id):
     """
     Get an author based on an ORCID identifier.
     """
-    resp = requests.get(ORCID_PUBLIC_BASE_URL + unicode(orcid_id),
-                        headers=BASE_HEADERS)
+    url = "{}{}/orcid-profile".format(ORCID_PUBLIC_BASE_URL, unicode(orcid_id))
+    resp = requests.get(url, headers=BASE_HEADERS)
     json_body = resp.json()
     return Author(json_body)
 
