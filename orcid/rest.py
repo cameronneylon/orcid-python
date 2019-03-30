@@ -1,4 +1,5 @@
 import requests
+import datetime
 
 from .constants import ORCID_PUBLIC_BASE_URL
 from .utils import dictmapper, MappingRule as to
@@ -88,8 +89,42 @@ Works = dictmapper('Works', {
     'publications':to(WORKS_PATH + ['orcid-work'], _parse_publications),
 })
 
+def _parse_dateparts_to_datetime(d):
+    if d is not None:
+        return datetime.date(int(d.get('year').get('value')), 
+                             int(d.get('month', 1).get('value', 1)),
+                             int(d.get('day', 1).get('value', 1))
+                             )
+    return None
+                              
+
+GrantBase = dictmapper('GrantBase', {
+    'title': ['funding-title', 'title', 'value'],
+    'funder': ['organization', 'name'],
+    'value': to(['amount', 'value'], lambda v: int(v) if v is not None else None),
+    'currency': ['amount', 'currency-code'],
+    'start_date': to(['start-date'], _parse_dateparts_to_datetime),
+    'end_date': to(['end-date'], _parse_dateparts_to_datetime)
+    })
+    
+class Grant(GrantBase):
+    def __repr__(self):
+        return '<%s "%s">' % (type(self).__name__, self.title)
+
+GRANTS_PATH = ['orcid-profile', 'orcid-activities', 'funding-list',]
+
+def _parse_grants(l):
+    if l is not None:
+        return [Grant(d) for d in l]
+    return []
+    
+Funding = dictmapper('Funding', {
+    'grants':to(GRANTS_PATH + ['funding'], _parse_grants)
+    })
+
+
 AuthorBase = dictmapper('AuthorBase', {
-    'orcid':['orcid-profile','orcid','value'],
+    'orcid':['orcid-profile','orcid-identifier','path'],
     'family_name':PERSONAL_DETAILS_PATH + ['family-name','value'],
     'given_name':PERSONAL_DETAILS_PATH + ['given-names','value'],
     'biography':to(BIO_PATH + ['biography'], _parse_value),
@@ -112,6 +147,19 @@ class Author(AuthorBase):
         if self._loaded_works is None:
             self._load_works()
         return self._loaded_works.publications
+
+
+    def _load_funding(self):
+        resp = requests.get(ORCID_PUBLIC_BASE_URL + self.orcid
+                            + '/funding', headers = BASE_HEADERS)
+        self._funding = Funding(resp.json())
+
+    @property
+    def grants(self):
+        if not hasattr(self, '_funding'):
+            self._load_funding()
+        return self._funding.grants
+
 
     @property
     def identifiers(self):
